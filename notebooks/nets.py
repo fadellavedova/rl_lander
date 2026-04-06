@@ -97,6 +97,13 @@ class QNet:
         self.h = np.maximum(0, self.z1)
         self.q = self.W2 @ self.h + self.b2
         return self.q
+    
+    def predict (self, x):
+        x = np.array(x)
+        z1 = self.W1 @ x + self.b1
+        h = np.maximum(0, z1)
+        q = self.W2 @ h + self.b2
+        return q
 
 
     def backward(self, q_target, a_idx):
