@@ -84,7 +84,8 @@ def draw_lander(screen, state, thrust):
 
 def generate_terrain(width, scale=0.1, amplitude=2.0):
     xs = np.linspace(-width/2, width/2, width)
-    heights = amplitude * np.sin((xs + np.random.uniform(-10.0,10.0)) * scale) + 0.5 * np.sin((xs + 5) * scale * 3) + 2
+    #heights = amplitude * np.sin((xs + np.random.uniform(-10.0,10.0)) * scale) + 0.5 * np.sin((xs + 5) * scale * 3) + 2
+    heights = np.ones_like(xs)
     return xs, heights
 
 terrain_x, terrain_h = generate_terrain(2000)
@@ -99,7 +100,7 @@ def draw_terrain(screen):
     points.append((WIDTH, HEIGHT))
     points.append((0, HEIGHT))
 
-    pygame.draw.polygon(screen, (60, 180, 75), points)
+    pygame.draw.polygon(screen, (60, 60, 60), points)
 
 def draw_background(screen):
     screen.blit(background, (0, 0))
@@ -114,7 +115,7 @@ def render(state, thrust):
     # suelo
     draw_background(screen)
     draw_terrain(screen)
-    draw_lander(screen, state, thrust)
+    draw_lander(screen, state, thrust[0])
 
 
     pygame.display.flip()

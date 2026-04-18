@@ -176,13 +176,21 @@ class ReplayBuffer():
         self.s_next[idx],
         self.done[idx]
     )
+  
+  def clean(self, n):
+    if self.ptr > n:
+      self.ptr = self.ptr - n
+    self.size = max(self.size - n, 0)
+
 
 class DDPG_Critic(QNet):
   def __init__(self, n_s, n_a, hidden=32):
     self.W1 = np.random.randn(hidden, n_s + n_a) * 0.01
     self.b1 = np.zeros((hidden, 1))
-    self.W2 = np.random.randn(1, hidden) * 0.01
-    self.b2 = np.zeros((1, 1))
+    self.W2 = np.random.randn(hidden, hidden) * 0.01
+    self.b2 = np.zeros((hidden, 1))
+    self.W3 = np.random.randn(1, hidden) * 0.01
+    self.b3 = np.zeros((1, 1))
 
     self.n_s = n_s
     self.n_a = n_a
@@ -190,15 +198,19 @@ class DDPG_Critic(QNet):
   def forward(self, s, a):
     self.x = np.vstack([np.array(s), np.array(a)])
     self.z1 = self.W1 @ self.x + self.b1
-    self.h = np.tanh(self.z1)
-    self.y = self.W2 @ self.h + self.b2
+    self.h1 = np.tanh(self.z1)
+    self.z2 = self.W2 @ self.h1 + self.b2
+    self.h2 = np.tanh(self.z2)
+    self.y = self.W3 @ self.h2 + self.b3
     return self.y
 
   def predict(self, s, a):
     x = np.vstack([np.array(s), np.array(a)])
     z1 = self.W1 @ x + self.b1
-    h = np.tanh(self.z1)
-    y = self.W2 @ h + self.b2
+    h1 = np.tanh(z1)
+    z2 = self.W2 @ h1 + self.b2
+    h2 = np.tanh(z2)
+    y = self.W3 @ h2 + self.b3
     return y
 
   def grad_a(self):
@@ -208,8 +220,11 @@ class DDPG_Critic(QNet):
     """
     dL_dy = np.ones_like(self.y)
 
-    dL_dh = self.W2.T @ dL_dy
-    dL_dz1 = (1 - self.h**2) * dL_dh # Derivada de tanh
+    dL_dh2 = self.W3.T @ dL_dy
+    dL_dz2 = (1 - self.h2**2) * dL_dh2 # Derivada de tanh
+
+    dL_dh1 = self.W2.T @ dL_dz2
+    dL_dz1 = (1 - self.h1**2) * dL_dh1
 
     dL_dx = self.W1.T @ dL_dz1
     dL_da = dL_dx[self.n_s:]
@@ -224,36 +239,67 @@ class DDPG_Critic(QNet):
     dL_dy = 2 * (self.y - y_target)
     dL_dy /= self.y.shape[1]
 
-    self.dL_dW2 = dL_dy @ self.h.T
+    self.dL_dW3 = dL_dy @ self.h2.T
+    self.dL_db3 = np.sum(dL_dy, axis=1, keepdims=True)
+
+    dL_dh2 = self.W3.T @ dL_dy
+    dL_dz2 = (1 - self.h2**2) * dL_dh2
+
+    self.dL_dW2 = dL_dz2 @ self.h1.T
     self.dL_db2 = np.sum(dL_dy, axis=1, keepdims=True)
 
-    dL_dh = self.W2.T @ dL_dy
-    dL_dz1 = (1 - self.h**2) * dL_dh
+    dL_dh1 = self.W2.T @ dL_dz2
+    dL_dz1 = (1 - self.h1**2) * dL_dh1
 
     self.dL_dW1 = dL_dz1 @ self.x.T
     self.dL_db1 = np.sum(dL_dz1, axis=1, keepdims=True)
 
+  def update_weights(self, lr):
+    self.W3 -= lr * self.dL_dW3
+    self.b3 -= lr * self.dL_db3
+    self.W2 -= lr * self.dL_dW2
+    self.b2 -= lr * self.dL_db2
+    self.W1 -= lr * self.dL_dW1
+    self.b1 -= lr * self.dL_db1
+
+  def soft_parameter_update(self, network, tau):
+    """
+    Updates parameters with the ones from network by the weight tau
+    """
+    self.W1 = tau*self.W1 + (1-tau)*network.W1
+    self.b1 = tau*self.b1 + (1-tau)*network.b1
+    self.W2 = tau*self.W2 + (1-tau)*network.W2
+    self.b2 = tau*self.b2 + (1-tau)*network.b2
+    self.W3 = tau*self.W3 + (1-tau)*network.W3
+    self.b3 = tau*self.b3 + (1-tau)*network.b3
 
 class DDPG_Actor(QNet):
-  def __init__(self, n_s, hidden=32):
+  def __init__(self, n_s, n_a, hidden=32):
     self.W1 = np.random.randn(hidden, n_s) * 0.01
     self.b1 = np.zeros((hidden, 1))
-    self.W2 = np.random.randn(1, hidden) * 0.01
-    self.b2 = np.zeros((1, 1))
+    self.W2 = np.random.randn(hidden, hidden) * 0.01
+    self.b2 = np.zeros((hidden, 1))
+    self.W3 = np.random.randn(n_a, hidden) * 0.01
+    self.b3 = np.zeros((n_a, 1))
 
 
   def forward(self, s):
     self.x = np.array(s)
     self.z1 = self.W1 @ self.x + self.b1
-    self.h = np.tanh(self.z1)
-    self.y = np.tanh(self.W2 @ self.h + self.b2)
+    self.h1 = np.tanh(self.z1)
+    self.z2 = self.W2 @ self.h1 + self.b2
+    self.h2 = np.tanh(self.z2)
+    self.y = np.tanh(self.W3 @ self.h2 + self.b3)
     return self.y
 
   def predict(self, s):
     x = np.array(s)
     z1 = self.W1 @ x + self.b1
-    h = np.tanh(z1)
-    y = np.tanh(self.W2 @ h + self.b2)
+    h1 = np.tanh(z1)
+    z2 = self.W2 @ h1 + self.b2
+    h2 = np.tanh(z2)
+    y = np.tanh(self.W3 @ h2 + self.b3)
+
     return y
 
   def backward(self, dQ_da):
@@ -261,21 +307,39 @@ class DDPG_Actor(QNet):
       El backward incluye los signos negativos porque el update es aditivo 
     """
     
-    self.dL_dW2 = ((1-self.y**2) * dQ_da) @ self.h.T
-    self.dL_db2 = np.sum((1-self.y**2) * dQ_da, axis=1, keepdims=True)
+    self.dL_dW3 = ((1 - self.y**2) * dQ_da) @ self.h2.T
+    self.dL_db3 = np.sum((1 - self.y**2) * dQ_da, axis=1, keepdims=True)
 
-    dL_dh = self.W2.T @ dQ_da
-    dL_dz1 = (1 - self.h**2) * dL_dh
+    dL_dh2 = self.W3.T @ dQ_da
+    dL_dz2 = (1 - self.h2**2) * dL_dh2
+
+    self.dL_dW2 = dL_dz2 @ self.h1.T
+    self.dL_db2 = np.sum(dL_dz2, axis=1, keepdims=True)
+
+    dL_dh1 = self.W2.T @ dL_dz2
+    dL_dz1 = (1 - self.h1**2) * dL_dh1
 
     self.dL_dW1 = dL_dz1 @ self.x.T
     self.dL_db1 = np.sum(dL_dz1, axis=1, keepdims=True)
 
   def update_weights(self, lr):
+    self.W3 += lr * self.dL_dW3
+    self.b3 += lr * self.dL_db3
     self.W2 += lr * self.dL_dW2
     self.b2 += lr * self.dL_db2
     self.W1 += lr * self.dL_dW1
     self.b1 += lr * self.dL_db1
 
+  def soft_parameter_update(self, network, tau):
+    """
+    Updates parameters with the ones from network by the weight tau
+    """
+    self.W1 = tau*self.W1 + (1-tau)*network.W1
+    self.b1 = tau*self.b1 + (1-tau)*network.b1
+    self.W2 = tau*self.W2 + (1-tau)*network.W2
+    self.b2 = tau*self.b2 + (1-tau)*network.b2
+    self.W3 = tau*self.W3 + (1-tau)*network.W3
+    self.b3 = tau*self.b3 + (1-tau)*network.b3
 
 
 
